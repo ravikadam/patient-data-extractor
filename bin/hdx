@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Wrapper so the CLI works from anywhere (used by the Claude Code skill).
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT" && exec "$ROOT/.venv/bin/python" -m app.cli "$@"

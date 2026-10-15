@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Patient Data Extractor</title>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#fff; --ink:#1b2430; --muted:#667085; --line:#e4e7ec; --accent:#0f6e6e; --accent-ink:#fff;
+  --accent-soft:#e3f2f1; --warn:#b54708; --warn-soft:#fff4e5; --err:#b42318; --err-soft:#fdecea; --ok:#067647; --ok-soft:#e7f6ec;
+  --user:#0f6e6e; --event:#eef1f5; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#0f1418; --panel:#161d23; --ink:#e6eaee; --muted:#93a1ae; --line:#26313a; --accent:#3fb4ad; --accent-ink:#06201f;
+  --accent-soft:#163331; --warn:#f5a54a; --warn-soft:#2e2112; --err:#f97066; --err-soft:#2d1614; --ok:#47cd89; --ok-soft:#12291d;
+  --user:#1f5f5c; --event:#1c252d;}}
+*{box-sizing:border-box} html,body{height:100%}
+body{margin:0;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;background:var(--bg);color:var(--ink)}
+button{font:inherit;cursor:pointer;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:8px;padding:6px 12px}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+button:disabled{opacity:.5;cursor:default}
+input,select,textarea{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:7px 10px;width:100%}
+.app{display:grid;grid-template-rows:52px 1fr;height:100vh}
+header{display:flex;align-items:center;gap:12px;padding:0 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+header h1{font-size:15px;margin:0;font-weight:650;letter-spacing:.2px}
+header .badge{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 10px;font-family:var(--mono)}
+header .sp{flex:1}
+.main{display:grid;grid-template-columns:230px minmax(360px,1fr) minmax(380px,40%);min-height:0}
+aside{border-right:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0}
+aside .top{padding:12px}
+.sessions{overflow:auto;flex:1;padding:0 8px 12px}
+.sess{padding:8px 10px;border-radius:8px;cursor:pointer;margin-bottom:2px}
+.sess:hover{background:var(--bg)} .sess.active{background:var(--accent-soft)}
+.sess .t{font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sess .m{font-size:12px;color:var(--muted)}
+.chat{display:flex;flex-direction:column;min-height:0;position:relative}
+.thread{flex:1;overflow:auto;padding:20px 24px;display:flex;flex-direction:column;gap:12px}
+.msg{max-width:88%;padding:10px 14px;border-radius:12px;background:var(--panel);border:1px solid var(--line);overflow-wrap:anywhere}
+.msg.user{align-self:flex-end;background:var(--user);color:#fff;border-color:transparent;white-space:pre-wrap}
+.msg.event{align-self:center;background:var(--event);font-size:12.5px;color:var(--muted);white-space:pre-wrap;max-width:94%}
+.msg.pending{color:var(--muted);font-style:italic}
+.msg table{border-collapse:collapse;font-size:13px;margin:6px 0} .msg td,.msg th{border:1px solid var(--line);padding:3px 7px;text-align:left}
+.msg p{margin:.3em 0} .msg ul,.msg ol{margin:.3em 0;padding-left:1.3em} .msg code{font-family:var(--mono);font-size:12.5px}
+.tools{font-size:11.5px;color:var(--muted);margin-top:6px;font-family:var(--mono)}
+.empty{margin:auto;text-align:center;color:var(--muted);max-width:420px}
+.composer{border-top:1px solid var(--line);padding:12px 16px;background:var(--panel)}
+.files-pending{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;border:1px solid var(--line);border-radius:999px;padding:2px 9px;background:var(--bg);color:var(--ink);text-decoration:none;white-space:nowrap}
+.chip b{font-weight:600}
+.row{display:flex;gap:8px;align-items:flex-end}
+.row textarea{resize:none;height:42px;max-height:160px}
+.drop{position:absolute;inset:0;background:color-mix(in srgb,var(--accent) 12%,transparent);border:2px dashed var(--accent);display:none;align-items:center;justify-content:center;font-weight:600;color:var(--accent);z-index:5}
+.drop.on{display:flex}
+.panel{border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0}
+.tabs{display:flex;gap:2px;padding:8px 10px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.tab{border:none;border-bottom:2px solid transparent;border-radius:0;padding:8px 10px;color:var(--muted);background:none}
+.tab.active{color:var(--ink);border-bottom-color:var(--accent)}
+.tab .n{font-size:11px;background:var(--bg);border-radius:999px;padding:0 6px;margin-left:4px}
+.tab .n.w{background:var(--warn-soft);color:var(--warn)}
+.pbody{overflow:auto;flex:1;padding:12px 14px}
+details.sec{border:1px solid var(--line);border-radius:10px;margin-bottom:10px;overflow:hidden}
+details.sec>summary{padding:8px 12px;font-weight:600;cursor:pointer;background:var(--bg);list-style:none;display:flex;gap:8px;align-items:center}
+details.sec>summary::-webkit-details-marker{display:none}
+details.sec .cnt{font-weight:400;color:var(--muted);font-size:12px}
+.sec .inner{padding:6px 12px 10px}
+.ent{border-top:1px dashed var(--line);padding:8px 0 4px} .ent:first-child{border-top:none}
+.ent-h{font-weight:600;font-size:13px;margin-bottom:2px}
+.f{display:grid;grid-template-columns:150px 1fr;gap:8px;padding:3px 0;align-items:start}
+.f .k{color:var(--muted);font-size:12.5px;font-family:var(--mono);overflow-wrap:anywhere}
+.f .v{overflow-wrap:anywhere}
+.f.conf .v{background:var(--warn-soft);border-radius:6px;padding:4px 8px}
+.srcs{display:flex;flex-wrap:wrap;gap:4px;margin-top:2px}
+.src{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:0 6px;text-decoration:none;white-space:nowrap}
+.src:hover{color:var(--accent);border-color:var(--accent)}
+.cand{margin:4px 0}
+.cand .cv{font-weight:600}
+.flag{font-size:11px;font-weight:600;color:var(--warn);text-transform:uppercase;letter-spacing:.4px}
+.custom-tag{font-size:10.5px;color:var(--accent);border:1px solid var(--accent);border-radius:4px;padding:0 4px;margin-left:4px}
+.doc{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px}
+.doc .h{display:flex;gap:8px;align-items:center;justify-content:space-between}
+.doc .fn{font-weight:600;overflow-wrap:anywhere}
+.st{font-size:11px;border-radius:999px;padding:1px 8px}
+.st.extracted{background:var(--ok-soft);color:var(--ok)} .st.error{background:var(--err-soft);color:var(--err)} .st.pending{background:var(--bg);color:var(--muted)}
+.doc .meta{font-size:12px;color:var(--muted)} .doc .sum{font-size:13px;margin-top:4px}
+pre.json{font-family:var(--mono);font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere;margin:0}
+.muted{color:var(--muted)}
+dialog{border:1px solid var(--line);border-radius:14px;background:var(--panel);color:var(--ink);padding:0;width:min(560px,94vw)}
+dialog::backdrop{background:rgba(0,0,0,.35)}
+dialog .dh{padding:14px 18px;border-bottom:1px solid var(--line);font-weight:650}
+dialog .db{padding:14px 18px;display:grid;gap:12px;max-height:70vh;overflow:auto}
+dialog .df{padding:12px 18px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:8px}
+label .l{display:block;font-size:12.5px;color:var(--muted);margin-bottom:4px}
+.seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{border:none;border-radius:0;flex:1;padding:6px 4px}
+.seg button.on{background:var(--accent);color:var(--accent-ink)}
+.hint{font-size:12px;color:var(--muted)}
+.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:8px;font-size:13px;display:none;z-index:20;max-width:90vw}
+@media (max-width:1000px){ .main{grid-template-columns:1fr} aside,.panel{display:none} .main.show-panel .panel{display:flex} .main.show-panel .chat{display:none} }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>Patient Data Extractor</h1>
+    <span class="badge" id="modelBadge">…</span>
+    <span class="sp"></span>
+    <button id="panelToggle" style="display:none">Record</button>
+    <button id="settingsBtn">Settings</button>
+    <button id="publishBtn" class="primary" disabled>Publish</button>
+  </header>
+  <div class="main" id="main">
+    <aside>
+      <div class="top"><button class="primary" id="newSess" style="width:100%">+ New session</button></div>
+      <div class="sessions" id="sessions"></div>
+    </aside>
+    <section class="chat" id="chatArea">
+      <div class="thread" id="thread"><div class="empty">Create or pick a session, then drop healthcare documents here — PDFs, scans, photos, e-mails (.eml), Word, Excel, HL7, text.</div></div>
+      <div class="composer">
+        <div class="files-pending" id="pendingFiles"></div>
+        <div class="row">
+          <button id="attach" title="Attach files">📎</button>
+          <input type="file" id="fileInput" multiple hidden>
+          <textarea id="input" placeholder="Ask about the patient, request extra data elements, or say “publish”…"></textarea>
+          <button class="primary" id="send">Send</button>
+        </div>
+      </div>
+      <div class="drop" id="drop">Drop files to extract</div>
+    </section>
+    <section class="panel">
+      <div class="tabs" id="tabs"></div>
+      <div class="pbody" id="pbody"></div>
+    </section>
+  </div>
+</div>
+
+<dialog id="settings">
+  <div class="dh">Settings</div>
+  <div class="db">
+    <label><span class="l">LLM provider</span><select id="sProvider"></select></label>
+    <label><span class="l">Model</span><input id="sModel" list="modelList"><datalist id="modelList"></datalist></label>
+    <div><span class="l" style="font-size:12.5px;color:var(--muted)">Effort (reasoning depth vs. cost/latency)</span><div class="seg" id="sEffort"></div></div>
+    <label><span class="l">API key for <span id="sKeyProv"></span></span><input id="sKey" type="password" autocomplete="off" placeholder="paste key to set / replace">
+      <span class="hint" id="sKeyStatus"></span></label>
+    <label><span class="l">Max output tokens</span><input id="sMax" type="number" min="1024" step="1024"></label>
+    <label><span class="l">Publish webhook URL (e.g. https://webhook.site/…)</span><input id="sHook" placeholder="https://webhook.site/your-uuid"></label>
+    <div class="hint" id="sPath"></div>
+  </div>
+  <div class="df"><button id="sCancel">Cancel</button><button class="primary" id="sSave">Save</button></div>
+</dialog>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let S = {sid:null, session:null, record:null, settings:null, tab:"record", pending:[], busy:false};
+
+async function api(path, opts={}) {
+  const r = await fetch(path, opts);
+  const body = r.headers.get("content-type")?.includes("json") ? await r.json() : await r.text();
+  if (!r.ok) throw new Error(body?.detail || body || r.statusText);
+  return body;
+}
+const jpost = (p, b, m="POST") => api(p, {method:m, headers:{"Content-Type":"application/json"}, body:JSON.stringify(b||{})});
+function toast(t, ms=3500){ const e=$("#toast"); e.textContent=t; e.style.display="block"; clearTimeout(e._t); e._t=setTimeout(()=>e.style.display="none", ms); }
+function md(t){ try { return DOMPurify.sanitize(marked.parse(t||"")); } catch { return esc(t).replace(/\n/g,"<br>"); } }
+
+// ---------------------------------------------------------------- settings
+async function loadSettings(){
+  S.settings = await api("/api/settings");
+  const l = S.settings.llm;
+  $("#modelBadge").textContent = `${l.provider} · ${l.model} · effort ${l.effort}`;
+}
+function openSettings(){
+  const st = S.settings, l = st.llm;
+  $("#sProvider").innerHTML = Object.entries(st.providers).map(([k,v]) => `<option value="${k}">${esc(v.label)}</option>`).join("");
+  $("#sProvider").value = l.provider; $("#sModel").value = l.model; $("#sMax").value = l.max_tokens;
+  $("#sHook").value = st.webhook.url || ""; $("#sPath").textContent = "Persisted to " + st.settings_path;
+  let effort = l.effort;
+  const drawEffort = () => $("#sEffort").innerHTML = st.effort_levels.map(e => `<button data-e="${e}" class="${e===effort?'on':''}">${e}</button>`).join("");
+  drawEffort();
+  $("#sEffort").onclick = e => { if (e.target.dataset.e){ effort = e.target.dataset.e; drawEffort(); } };
+  const syncProv = (changed) => {
+    const p = $("#sProvider").value, meta = st.providers[p];
+    $("#modelList").innerHTML = meta.models.map(m => `<option value="${m}">`).join("");
+    if (changed) $("#sModel").value = meta.default_model;
+    $("#sKeyProv").textContent = meta.label; $("#sKey").value = "";
+    const status = l.api_key_status[p];
+    $("#sKeyStatus").textContent = status === "config" ? `Stored: ${l.api_keys[p]}` : status === "env" ? `Using ${meta.env_key} from environment (${l.api_keys[p]})` : "No key set";
+  };
+  $("#sProvider").onchange = () => syncProv(true); syncProv(false);
+  $("#sSave").onclick = async () => {
+    const p = $("#sProvider").value, keys = {};
+    if ($("#sKey").value.trim()) keys[p] = $("#sKey").value.trim();
+    try {
+      await jpost("/api/settings", {llm:{provider:p, model:$("#sModel").value.trim(), effort, max_tokens:+$("#sMax").value||32000, api_keys:keys},
+                                    webhook:{url:$("#sHook").value.trim()}}, "PUT");
+      await loadSettings(); $("#settings").close(); toast("Settings saved");
+    } catch(e){ toast("Error: " + e.message, 6000); }
+  };
+  $("#settings").showModal();
+}
+
+// ---------------------------------------------------------------- sessions
+async function loadSessions(){
+  const list = await api("/api/sessions");
+  $("#sessions").innerHTML = list.map(s => `<div class="sess ${s.id===S.sid?'active':''}" data-id="${s.id}">
+    <div class="t">${esc(s.title)}</div><div class="m">${s.documents} docs · ${s.publishes} publishes</div></div>`).join("") || `<div class="muted" style="padding:8px">No sessions yet</div>`;
+}
+async function openSession(id){
+  S.sid = id; localStorage.setItem("hdx.sid", id);
+  await refresh(); loadSessions();
+}
+async function refresh(){
+  if (!S.sid) return;
+  [S.session, S.record] = await Promise.all([api(`/api/sessions/${S.sid}`), api(`/api/sessions/${S.sid}/record`)]);
+  $("#publishBtn").disabled = false;
+  renderThread(); renderPanel();
+}
+
+// ---------------------------------------------------------------- chat
+function renderThread(extra){
+  const msgs = S.session?.messages || [];
+  if (!msgs.length && !extra) { $("#thread").innerHTML = `<div class="empty"><b>${esc(S.session?.title||"")}</b><br>Drop documents here or use 📎 to start extracting.</div>`; return; }
+  $("#thread").innerHTML = msgs.map(m => {
+    if (m.role === "user") return `<div class="msg user">${esc(m.content)}</div>`;
+    if (m.role === "event") return `<div class="msg event">${esc(m.content)}</div>`;
+    const tools = (m.tool_calls||[]).length ? `<div class="tools">tools: ${m.tool_calls.map(t=>esc(t.tool)).join(", ")}</div>` : "";
+    return `<div class="msg">${md(m.content)}${tools}</div>`;
+  }).join("") + (extra||"");
+  $("#thread").scrollTop = $("#thread").scrollHeight;
+}
+function setBusy(b){ S.busy=b; $("#send").disabled=b; $("#attach").disabled=b; }
+async function send(){
+  if (S.busy) return;
+  const text = $("#input").value.trim();
+  if (!S.sid) { await openSession((await jpost("/api/sessions", {})).id); }
+  if (S.pending.length){
+    const files = S.pending; S.pending = []; renderPending();
+    const fd = new FormData(); files.forEach(f => fd.append("files", f));
+    setBusy(true);
+    renderThread(`<div class="msg pending">Extracting ${files.length} file(s) with ${esc(S.settings.llm.model)}… this can take a minute.</div>`);
+    try { await api(`/api/sessions/${S.sid}/files`, {method:"POST", body:fd}); }
+    catch(e){ toast("Upload failed: " + e.message, 6000); }
+    setBusy(false); await refresh(); loadSessions();
+  }
+  if (text){
+    $("#input").value = "";
+    S.session.messages.push({role:"user", content:text});
+    renderThread(`<div class="msg pending">Thinking…</div>`); setBusy(true);
+    try { await jpost(`/api/sessions/${S.sid}/chat`, {message:text}); }
+    catch(e){ S.session.messages.push({role:"event", content:"Error: " + e.message}); }
+    setBusy(false); await refresh(); loadSessions();
+  }
+}
+function addFiles(list){ S.pending.push(...list); renderPending(); }
+function renderPending(){
+  $("#pendingFiles").innerHTML = S.pending.map((f,i) => `<span class="chip">${esc(f.name)} <a href="#" data-i="${i}" style="color:inherit;text-decoration:none">×</a></span>`).join("");
+  if (S.pending.length) $("#send").textContent = "Extract"; else $("#send").textContent = "Send";
+}
+
+// ---------------------------------------------------------------- record panel
+const TABS = [["record","Record"],["conflicts","Conflicts"],["documents","Documents"],["json","JSON"],["publishes","Publishes"]];
+function renderPanel(){
+  const r = S.record, n = {conflicts: r?.conflicts.length||0, documents: r?.documents.length||0, publishes: S.session?.publishes?.length||0};
+  $("#tabs").innerHTML = TABS.map(([k,l]) => `<button class="tab ${S.tab===k?'active':''}" data-t="${k}">${l}${n[k]!=null?`<span class="n ${k==='conflicts'&&n[k]?'w':''}">${n[k]}</span>`:""}</button>`).join("");
+  const b = $("#pbody");
+  if (!r){ b.innerHTML = `<div class="muted">No session selected.</div>`; return; }
+  if (S.tab==="record") b.innerHTML = renderRecord(r.record) || `<div class="muted">Nothing extracted yet.</div>`;
+  if (S.tab==="conflicts") b.innerHTML = r.conflicts.length ? r.conflicts.map(c => `<div class="doc"><div class="fn" style="font-family:var(--mono);font-size:12.5px">${esc(c.path)}</div>
+     ${c.candidates.map(x => `<div class="cand"><span class="cv">${esc(fmt(x.value))}</span> <span class="muted">— ${x.sources.map(esc).join("; ")}</span></div>`).join("")}</div>`).join("") : `<div class="muted">No conflicts between sources.</div>`;
+  if (S.tab==="documents") b.innerHTML = r.documents.map(d => `<div class="doc"><div class="h"><a class="fn" href="/api/sessions/${S.sid}/documents/${d.id}/file" target="_blank">${esc(d.filename)}</a><span class="st ${d.status}">${d.status}</span></div>
+     <div class="meta">${esc(d.document_type||"")}${d.document_date?" · "+esc(d.document_date):""}${d.author?" · "+esc(d.author):""}${d.parent_id?" · e-mail attachment":""}</div>
+     ${d.summary?`<div class="sum">${esc(d.summary)}</div>`:""}${d.error?`<div class="sum" style="color:var(--err)">${esc(d.error)}</div>`:""}</div>`).join("") || `<div class="muted">No documents.</div>`;
+  if (S.tab==="json") b.innerHTML = `<div style="display:flex;gap:6px;margin-bottom:8px"><a class="chip" href="/api/sessions/${S.sid}/record?detail=values" target="_blank">values JSON</a><a class="chip" href="/api/sessions/${S.sid}/record" target="_blank">full JSON (provenance)</a></div><pre class="json">${esc(JSON.stringify(r.record, null, 1))}</pre>`;
+  if (S.tab==="publishes") b.innerHTML = (S.session.publishes||[]).slice().reverse().map(p => `<div class="doc"><div class="h"><b>#${p.sequence}</b><span class="st ${p.ok?'extracted':'error'}">${p.ok?'delivered':'failed'} ${p.status_code??""}</span></div>
+     <div class="meta">${esc(p.at)} · ${esc(p.publish_id)}</div><div class="meta" style="overflow-wrap:anywhere">${esc(p.url)}</div>${p.error?`<div class="sum" style="color:var(--err)">${esc(p.error)}</div>`:""}</div>`).join("") || `<div class="muted">Not published yet. Session id <code>${esc(S.sid)}</code> is sent with every publish.</div>`;
+}
+const fmt = v => typeof v === "object" ? JSON.stringify(v) : v;
+const isNode = x => x && typeof x === "object" && "conflict" in x && "sources" in x;
+function srcChips(srcs){ return `<div class="srcs">${srcs.map(s => s.doc_id==="user" ? `<span class="src">user override${s.note?": "+esc(s.note):""}</span>` :
+   `<a class="src" target="_blank" href="/api/sessions/${S.sid}/documents/${s.doc_id}/file" title="${esc(s.document_type||"")}">${esc(s.filename)} · ${esc(s.document_date||"undated")}</a>`).join("")}</div>`; }
+function fieldRow(k, node, custom){
+  const tag = custom ? `<span class="custom-tag">custom</span>` : "";
+  const res = node.resolved_by ? ` <span class="custom-tag">user-confirmed</span>` : "";
+  if (!node.conflict && !node.variants) return `<div class="f"><div class="k">${esc(k)}${tag}</div><div class="v">${esc(fmt(node.value))}${res}${srcChips(node.sources)}</div></div>`;
+  const cls = node.conflict ? "f conf" : "f", label = node.conflict ? `<span class="flag">conflict</span>` : `<span class="flag" style="color:var(--muted)">wording varies</span>`;
+  return `<div class="${cls}"><div class="k">${esc(k)}${tag}</div><div class="v">${label}${node.candidates.map(c =>
+    `<div class="cand"><span class="cv">${esc(fmt(c.value))}</span>${srcChips(c.sources)}</div>`).join("")}</div></div>`;
+}
+function renderObj(obj, prefix="", custom=false){
+  let h = "";
+  for (const [k,v] of Object.entries(obj)){
+    if (k==="entity_key"||k==="sources") continue;
+    if (isNode(v)) h += fieldRow(prefix+k, v, custom);
+    else if (v && typeof v === "object") h += renderObj(v, prefix+k+".", custom || k==="custom");
+  }
+  return h;
+}
+function renderRecord(rec){
+  return Object.entries(rec).map(([sec, val]) => {
+    const isList = Array.isArray(val);
+    const conflicts = JSON.stringify(val).split('"conflict":true').length - 1;
+    const inner = isList ? val.map(e => `<div class="ent"><div class="ent-h">${esc(e.entity_key)}</div>${renderObj(e)}</div>`).join("") : renderObj(val);
+    return `<details class="sec" open><summary>${esc(sec.replace(/_/g," "))} <span class="cnt">${isList?val.length+" items":""}${conflicts?` · <span style="color:var(--warn)">${conflicts} conflict${conflicts>1?"s":""}</span>`:""}</span></summary><div class="inner">${inner}</div></details>`;
+  }).join("");
+}
+
+// ---------------------------------------------------------------- wiring
+$("#settingsBtn").onclick = openSettings; $("#sCancel").onclick = () => $("#settings").close();
+$("#newSess").onclick = async () => { const s = await jpost("/api/sessions", {}); S.tab="record"; openSession(s.id); };
+$("#sessions").onclick = e => { const d = e.target.closest(".sess"); if (d) openSession(d.dataset.id); };
+$("#tabs").onclick = e => { const t = e.target.closest(".tab"); if (t){ S.tab = t.dataset.t; renderPanel(); } };
+$("#send").onclick = send;
+$("#input").onkeydown = e => { if (e.key==="Enter" && !e.shiftKey){ e.preventDefault(); send(); } };
+$("#attach").onclick = () => $("#fileInput").click();
+$("#fileInput").onchange = e => { addFiles([...e.target.files]); e.target.value=""; };
+$("#pendingFiles").onclick = e => { if (e.target.dataset.i){ e.preventDefault(); S.pending.splice(+e.target.dataset.i,1); renderPending(); } };
+$("#publishBtn").onclick = async () => {
+  if (!S.sid) return;
+  if (!S.settings.webhook.url){ toast("Set a webhook URL in Settings first"); openSettings(); return; }
+  $("#publishBtn").disabled = true;
+  try { const r = await jpost(`/api/sessions/${S.sid}/publish`, {}); toast(r.ok ? `Published #${r.sequence} (HTTP ${r.status_code})` : `Publish failed: ${r.error||r.status_code}`, 5000); }
+  catch(e){ toast("Publish failed: " + e.message, 6000); }
+  $("#publishBtn").disabled = false; S.tab = "publishes"; refresh(); loadSessions();
+};
+$("#panelToggle").onclick = () => $("#main").classList.toggle("show-panel");
+if (matchMedia("(max-width:1000px)").matches) $("#panelToggle").style.display = "";
+const chatArea = $("#chatArea");
+["dragenter","dragover"].forEach(ev => chatArea.addEventListener(ev, e => { e.preventDefault(); $("#drop").classList.add("on"); }));
+["dragleave","drop"].forEach(ev => $("#drop").addEventListener(ev, e => { e.preventDefault(); $("#drop").classList.remove("on"); }));
+$("#drop").addEventListener("drop", e => addFiles([...e.dataTransfer.files]));
+
+(async () => {
+  await loadSettings(); await loadSessions();
+  let last = null; try { last = localStorage.getItem("hdx.sid"); } catch {}
+  if (last) { try { await openSession(last); } catch { S.sid = null; } }
+  renderPanel();
+})();
+</script>
+</body>
+</html>
