@@ -883,3 +883,9 @@ Good custom-field demos are preferred pharmacy, code status and advance directiv
 | Webhook | Single URL, no retries or signing | HMAC signatures, retries with backoff, multiple subscribers |
 | Output standard | Custom JSON schema | FHIR R4 bundle export alongside |
 | Evaluation | One offline test + manual live run | Labelled document set; precision/recall per field; regression evals per model/effort |
+
+---
+
+## License
+
+[MIT](LICENSE). The sample documents are fictional; this proof of concept is not intended for real patient data.
