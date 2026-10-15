@@ -1,0 +1,28 @@
+# docker compose up -d --build
+#   portal + REST API : http://localhost:8000
+#   MCP (HTTP)        : http://localhost:8765/mcp
+# Both services share the same session data and settings volumes.
+services:
+  portal:
+    build: .
+    ports: ["8000:8000"]
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}   # optional; can also be set in the portal
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    volumes: [hdx-data:/data, hdx-config:/config]
+    restart: unless-stopped
+
+  mcp:
+    build: .
+    command: ["python", "-m", "app.mcp_server", "--http", "--host", "0.0.0.0", "--port", "8765"]
+    ports: ["8765:8765"]
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    volumes: [hdx-data:/data, hdx-config:/config]
+    healthcheck: {disable: true}
+    restart: unless-stopped
+
+volumes:
+  hdx-data:
+  hdx-config:

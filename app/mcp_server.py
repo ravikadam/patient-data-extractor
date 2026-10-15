@@ -1,6 +1,8 @@
-"""MCP server (stdio) exposing the extractor to any MCP client (Claude Code, Claude Desktop, ...).
+"""MCP server exposing the extractor to any MCP client (Claude Code, Claude Desktop, ...).
 
-Run:  .venv/bin/python -m app.mcp_server
+Run locally (stdio):       .venv/bin/python -m app.mcp_server
+Run remotely (HTTP):       .venv/bin/python -m app.mcp_server --http --host 0.0.0.0 --port 8765
+                           -> endpoint http://<host>:8765/mcp
 """
 from __future__ import annotations
 
@@ -123,7 +125,17 @@ def update_settings_tool(provider: str | None = None, model: str | None = None, 
 
 
 def main():
-    mcp.run()
+    import argparse
+
+    p = argparse.ArgumentParser(description="Patient data extractor MCP server")
+    p.add_argument("--http", action="store_true", help="serve streamable HTTP instead of stdio")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8765)
+    a = p.parse_args()
+    if a.http:
+        mcp.run("streamable-http", host=a.host, port=a.port)
+    else:
+        mcp.run()
 
 
 if __name__ == "__main__":

@@ -31,8 +31,10 @@ enough detail to rebuild the system from scratch.
 12. [Webhook contract](#12-webhook-contract)
 13. [Concurrency and error handling](#13-concurrency-and-error-handling)
 14. [Extending the system](#14-extending-the-system)
-15. [Testing](#15-testing)
-16. [Known limitations and roadmap](#16-known-limitations-and-roadmap)
+15. [Deployment](#15-deployment)
+16. [Deploying to Claude Code (skill + MCP)](#16-deploying-to-claude-code-skill--mcp)
+17. [Testing](#17-testing)
+18. [Known limitations and roadmap](#18-known-limitations-and-roadmap)
 
 ---
 
@@ -97,6 +99,10 @@ bin/hdx publish <session_id>
 You can also open the folder in **Claude Code**. The `patient-extractor` skill and the MCP server
 (`.mcp.json`) are picked up automatically.
 
+For servers, Docker and team rollout see [§15 Deployment](#15-deployment). To install the
+skill and MCP server for Claude Code at user level or against a central server, see
+[§16 Deploying to Claude Code](#16-deploying-to-claude-code-skill--mcp).
+
 ---
 
 ## 3. Repository layout
@@ -121,6 +127,9 @@ app/
   cli.py               `hdx` CLI (JSON output) used by the Claude Code skill
 web/index.html         Native chatbot portal (single file, vanilla JS)
 bin/hdx                CLI wrapper (uses .venv)
+bin/hdx-mcp            MCP server wrapper (stdio; --http for remote)
+scripts/install_claude_code.sh              Installs skill + MCP server at Claude Code user level
+Dockerfile, docker-compose.yml, .dockerignore  Container deployment (portal + MCP over HTTP)
 .claude/skills/patient-extractor/SKILL.md   Claude Code skill (second UI)
 .mcp.json              Registers the MCP server for Claude Code
 samples/generate_samples.py                 Builds a fictional multi-format case with planted conflicts
@@ -723,7 +732,7 @@ config/settings.json              # settings incl. API keys (0600, git-ignored)
 
 Error mapping: `KeyError` → 404, `ValueError` → 400, `LLMError` → 502, as `{"detail": "..."}`.
 
-### MCP server (`python -m app.mcp_server`, stdio, `mcp` 2.x `MCPServer`)
+### MCP server (`python -m app.mcp_server` stdio, or `--http` → `http://host:8765/mcp`; `mcp` 2.x `MCPServer`)
 
 Tools: `create_session`, `list_sessions`, `add_files(session_id, paths)`,
 `get_record(session_id, detail, section)`, `get_conflicts`, `list_documents`, `ask_documents`,
@@ -810,7 +819,256 @@ in the portal.
 
 ---
 
-## 15. Testing
+## 15. Deployment
+
+The service is a stateless Python process plus a data folder. Every deployment needs:
+
+| Item | Value |
+|---|---|
+| Runtime | Python 3.11+ with `requirements.txt` (or the Docker image) |
+| Portal + REST API | `uvicorn app.api:app` on port **8000** |
+| MCP server (optional) | `python -m app.mcp_server` (stdio), or `--http` on port **8765** at path `/mcp` |
+| Persistent storage | `HDX_DATA_DIR` (sessions, default `./data`) and `HDX_CONFIG_DIR` (settings incl. API keys, default `./config`) |
+| LLM credentials | Set in the portal Settings dialog (persisted), or env `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` |
+| Outbound network | LLM API (`api.anthropic.com` / `api.openai.com`) and the webhook host |
+| Request timeouts | Uploads run extraction in the request, so allow **≥ 300 s** at any proxy or load balancer |
+| Upload size | Allow at least 50 MB request bodies |
+| Replicas | **Exactly one** writer per data volume (file storage, see §13) |
+
+> **Security first.** The portal and API have **no authentication**. Never expose them publicly
+> as they are. Put them behind a VPN, an authenticating reverse proxy (SSO, or basic auth at
+> minimum) and TLS. Use synthetic data only until the production items in §18 are done.
+
+### 15.1 Local / developer machine
+
+```bash
+git clone https://github.com/ravikadam/patient-data-extractor.git && cd patient-data-extractor
+uv venv .venv -p 3.13 && uv pip install --python .venv/bin/python -r requirements.txt
+.venv/bin/python -m uvicorn app.api:app --port 8000
+```
+
+Open http://127.0.0.1:8000 and set the provider, model, effort, API key and webhook in Settings.
+
+### 15.2 Docker / Docker Compose
+
+`Dockerfile` builds one image (non-root user, volumes `/data` and `/config`, health check).
+`docker-compose.yml` runs two services from it that share the volumes:
+
+| Service | Port | Command |
+|---|---|---|
+| `portal` | 8000 | `uvicorn app.api:app --host 0.0.0.0 --port 8000` |
+| `mcp` | 8765 | `python -m app.mcp_server --http --host 0.0.0.0 --port 8765` |
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...          # optional: or set it later in the portal
+docker compose up -d --build
+docker compose logs -f portal
+```
+
+To run the CLI inside the container:
+
+```bash
+docker compose exec portal python -m app.cli sessions
+```
+
+To back up the session data:
+
+```bash
+docker run --rm -v patient-data-extractor_hdx-data:/d -v "$PWD":/b alpine tar czf /b/hdx-data.tgz -C /d .
+```
+
+Single image without Compose:
+
+```bash
+docker build -t patient-data-extractor .
+docker run -d -p 8000:8000 -v hdx-data:/data -v hdx-config:/config --name hdx patient-data-extractor
+```
+
+### 15.3 Linux VM with systemd and a reverse proxy
+
+```bash
+sudo useradd --system --create-home --home-dir /opt/hdx hdx
+sudo -u hdx git clone https://github.com/ravikadam/patient-data-extractor.git /opt/hdx/app
+cd /opt/hdx/app && sudo -u hdx python3 -m venv .venv && sudo -u hdx .venv/bin/pip install -r requirements.txt
+```
+
+`/etc/systemd/system/hdx.service`:
+
+```ini
+[Unit]
+Description=Patient Data Extractor (portal + REST API)
+After=network-online.target
+
+[Service]
+User=hdx
+WorkingDirectory=/opt/hdx/app
+Environment=HDX_DATA_DIR=/var/lib/hdx/data
+Environment=HDX_CONFIG_DIR=/var/lib/hdx/config
+EnvironmentFile=-/etc/hdx.env
+ExecStart=/opt/hdx/app/.venv/bin/uvicorn app.api:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+StateDirectory=hdx
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`/etc/hdx.env` is optional and should be mode 600. It can hold `ANTHROPIC_API_KEY=...`. Add a
+second unit with `ExecStart=... -m app.mcp_server --http --host 127.0.0.1 --port 8765` if you need
+remote MCP.
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl enable --now hdx
+```
+
+nginx in front of the app (TLS and authentication terminate here):
+
+```nginx
+server {
+  listen 443 ssl;
+  server_name hdx.example.internal;
+  # ssl_certificate ...; ssl_certificate_key ...;
+  auth_basic "HDX"; auth_basic_user_file /etc/nginx/hdx.htpasswd;   # or SSO (oauth2-proxy)
+  client_max_body_size 50m;
+  proxy_read_timeout 300s; proxy_send_timeout 300s;
+
+  location /     { proxy_pass http://127.0.0.1:8000; }
+  location /mcp  { proxy_pass http://127.0.0.1:8765/mcp; proxy_buffering off; }   # optional remote MCP
+}
+```
+
+### 15.4 Managed container platforms (ECS, Cloud Run, Azure Container Apps, Kubernetes)
+
+- Build and push the image: `docker build -t <registry>/patient-data-extractor:<tag> . && docker push ...`.
+- Mount persistent storage at `/data` and `/config` (EFS, Filestore, Azure Files, PVC). The image
+  stores everything there.
+- Run **one replica** per volume. Set the request timeout to at least 300 s and allow 50 MB uploads.
+- Inject `ANTHROPIC_API_KEY` from the platform's secret manager instead of storing it in the
+  portal.
+- Run the MCP service as a second container from the same image with the `mcp` command from
+  `docker-compose.yml`.
+- Health check: `GET /api/settings` returns 200.
+
+### 15.5 Upgrades and operations
+
+- **Upgrade:** `git pull` (or pull the new image), reinstall requirements, restart. Session files
+  are read tolerantly, so new keys are added lazily and old sessions keep working.
+- **Re-extract after prompt or schema changes:** `POST /api/sessions/{id}/documents/{doc}/reprocess`.
+  This adds a new extraction pass; old passes stay on disk.
+- **Logs:** uvicorn stdout. Every LLM error is also stored on the document (`error`) or in the
+  chat event.
+- **Change model or provider in production:** Settings dialog, `PUT /api/settings`, or
+  `python -m app.cli config --model ... --effort ...`. Every process picks it up on the next call.
+
+---
+
+## 16. Deploying to Claude Code (skill + MCP)
+
+Claude Code is the second user interface. Two Claude Code mechanisms are used, and they work
+independently:
+
+| Mechanism | File | What it gives Claude Code |
+|---|---|---|
+| **Skill** | `SKILL.md` in a skills directory | Instructions and domain knowledge. Claude runs the `hdx` CLI through its Bash tool. |
+| **MCP server** | `.mcp.json` or `claude mcp add` | Typed tools (`create_session`, `add_files`, `get_record`, `publish`, …). |
+
+**How Claude Code finds skills.** Claude Code loads skills from:
+
+- `.claude/skills/<name>/SKILL.md` inside the project it is opened in (project skills, committed
+  to git);
+- `~/.claude/skills/<name>/SKILL.md` (personal skills, available in every project).
+
+The YAML front matter (`name`, `description`) tells Claude when the skill applies. It is used
+automatically when a request matches ("extract the patient data from these PDFs", "what conflicts
+are there?", "publish it"), or explicitly with `/patient-extractor`.
+
+**Prerequisite for all options:** the repo is cloned and the venv is installed (§15.1). The skill
+calls `bin/hdx`, which runs `.venv/bin/python`.
+
+### Option A — project level (zero install, recommended for developers)
+
+```bash
+cd patient-data-extractor
+claude
+```
+
+- The skill in `.claude/skills/patient-extractor/` is available immediately.
+- The MCP server declared in `.mcp.json` is a *project-scoped* server. Claude Code asks once for
+  approval to use it. Accept it, or check later with `/mcp` inside Claude Code.
+- Try: *"Create a session and extract samples/case_eleanor_vasquez/\*, then show me the conflicts."*
+
+### Option B — user level (use the extractor from any project)
+
+```bash
+scripts/install_claude_code.sh
+```
+
+The script:
+
+1. copies the skill to `~/.claude/skills/patient-extractor/SKILL.md` and rewrites `bin/hdx` to
+   this checkout's absolute path, so it works from any working directory;
+2. runs `claude mcp add --scope user patient-data-extractor -- <repo>/bin/hdx-mcp`.
+
+To remove both:
+
+```bash
+scripts/install_claude_code.sh --uninstall
+```
+
+Re-run the script after pulling skill changes, because the user-level copy doesn't update itself.
+
+Manual equivalent:
+
+```bash
+mkdir -p ~/.claude/skills/patient-extractor
+sed "s#bin/hdx#$PWD/bin/hdx#g" .claude/skills/patient-extractor/SKILL.md > ~/.claude/skills/patient-extractor/SKILL.md
+claude mcp add --scope user patient-data-extractor -- "$PWD/bin/hdx-mcp"
+```
+
+### Option C — team access to a central server (remote MCP)
+
+Deploy the `mcp` service (§15.2 or §15.3, behind auth). Each developer then registers it:
+
+```bash
+claude mcp add --transport http --scope user patient-data-extractor https://hdx.example.internal/mcp
+```
+
+If the proxy uses a token, add `--header "Authorization: Bearer <token>"`.
+
+Notes for remote use:
+
+- All users share the server's sessions and settings, including the configured model and webhook.
+- `add_files` takes **paths on the server**, so local files can't be passed by path. Upload them
+  through the REST API instead, then continue in Claude Code with the returned session id:
+  ```bash
+  curl -F files=@discharge.pdf -F files=@labs.xlsx https://hdx.example.internal/api/sessions/<sid>/files
+  ```
+- The CLI-based skill needs a local checkout. With only a remote server, use the MCP tools. The
+  skill's guidance on conflicts, custom fields and publish rules still applies if you install it
+  (Option B) for the instructions.
+
+### Verify the installation
+
+```bash
+claude mcp list
+```
+
+`claude mcp list` should show `patient-data-extractor` as connected. Inside Claude Code, `/mcp`
+shows the server and its 13 tools. Then ask: *"List my extraction sessions"* (MCP or skill) and
+*"Show the extractor settings"* (uses `hdx config`; API keys are masked).
+
+### Updating or customising the skill
+
+- Edit `.claude/skills/patient-extractor/SKILL.md`. Keep the front-matter `description` specific,
+  because it decides when Claude Code picks the skill.
+- Commit it: project-level users get it on `git pull`. User-level installs need the install script
+  re-run.
+- The skill and the portal share `config/settings.json` and `data/`. A session started in Claude
+  Code can be opened in the web portal and the other way round.
+
+---
+
+## 17. Testing
 
 ```bash
 .venv/bin/python tests/test_pipeline.py
@@ -870,7 +1128,7 @@ Good custom-field demos are preferred pharmacy, code status and advance directiv
 
 ---
 
-## 16. Known limitations and roadmap
+## 18. Known limitations and roadmap
 
 | Area | Current state (proof of concept) | Production direction |
 |---|---|---|

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Starts the MCP server from anywhere (stdio by default; pass --http for remote use).
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT" && exec "$ROOT/.venv/bin/python" -m app.mcp_server "$@"
