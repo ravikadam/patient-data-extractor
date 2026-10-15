@@ -309,11 +309,11 @@ sequenceDiagram
   par up to 4 documents in parallel
     S->>IN: prepare(filename, bytes)
     IN-->>S: parts (text/image/pdf), text, attachments, hint_date
-    S->>ST: save_text(); save attachments as child docs (queued)
+    S->>ST: save_text() and save attachments as child docs (queued)
     S->>EX: extract_document(parts, custom_fields)
     EX->>L: generate_json(EXTRACTION_SYSTEM, header + parts + template)
     L-->>EX: partial record + document metadata
-    S->>ST: save_extraction(kind=base); update doc (type, date, summary, status)
+    S->>ST: save_extraction(kind=base), then update doc (type, date, summary, status)
   end
   Note over S: repeat for queued e-mail attachments
   S->>S: reconcile(): entity resolution + value equivalence (LLM, cached)
